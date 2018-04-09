@@ -10,13 +10,16 @@
 
 Import-Module AWSPowerShell
 
-# Constants – Amazon S3 Configuration
-$config = Get-Content -Raw -Path 'C:\Scripts\config.json' | ConvertFrom-Json
+# Variable Constants
+$config = Get-Content -Raw -Path 'C:\Scripts\backup\config.json' | ConvertFrom-Json
 $source = 'Y:\'
+[string]$emailBody = ""
 
 Initialize-AWSDefaultConfiguration -AccessKey $config.AKey -SecretKey $config.SKey -Region $config.region
-
 Set-Location $source
+
+$emailBody = $emailBody + $(Get-Date -Format o) + "`tStart Backup Job`n"
+
 $backupFolders = Get-ChildItem -Directory | Select-Object -Property FullName
 foreach($folder in $backupFolders) {
     Set-Location $folder.FullName
@@ -26,7 +29,7 @@ foreach($folder in $backupFolders) {
         if(!(Get-S3Object -BucketName $config.bucket -Key $file.FullName)) { 
             try {
                 # upload the latest file
-                Write-Host "Uploading file: $file"
+                $emailBody = $emailBody + $(Get-Date -Format o) + "`tUploading file: " + $file.FullName + "`n"
                 Write-S3Object -BucketName $config.bucket -File $file.FullName -Key $file.FullName -CannedACLName private
             
                 # if the upload was successful, delete any old files in S3
@@ -36,15 +39,21 @@ foreach($folder in $backupFolders) {
                     $fileName = $file.FullName -replace "\\", "/"
                     if(!($backupFiles.Key -Like $fileName)) { 
                         try {
+                            $emailBody = $emailBody + $(Get-Date -Format o) + "`tDeleting S3 file: " + $backupFiles.Key + "`n"
                             Remove-S3Object -BucketName $config.bucket -Key $backupFiles.Key -Force
                         } catch {
-                            Write-Host "Error deleting file from S3"
+                            $emailBody = $emailBody + $(Get-Date -Format o) + "Error deleting file from S3`n"
                         }
                     }
                 }
             } catch {
-                Write-Host "Error uploading file: $folder.FullName"
+                $emailBody = $emailBody + $(Get-Date -Format o) + "Error uploading file: $folder.FullName"
             }
         }
     }
 }
+
+$emailBody = $emailBody + $(Get-Date -Format o) + "`tEnd Backup Job`n"
+$emailSubject = "Veeam to AWS S3 Backup Log - " + $(Get-Date -DisplayHint Date)
+
+Send-MailMessage -To $config.emailTo -From $config.emailFrom -Subject $emailSubject -SmtpServer $config.smtpServer -Body $emailBody
